@@ -13,12 +13,9 @@ load_dotenv()
 
 # --- Configuration ---
 DEBUG = True
-WAIT_TIME = 60 # 1 minute wait for collation
+WAIT_TIME = 60 
 MESSAGE_BUFFER = {}
 BUFFER_TIMERS = {}
-
-# ADD THE BOT IDs YOU WANT TO IGNORE HERE
-# You can find these in your logs when they post
 IGNORE_BOT_IDS = os.environ.get("IGNORE_BOT_IDS", "").split(",")
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -30,12 +27,11 @@ app = App(token=os.environ.get("SLACK_BOT_TOKEN"))
 def slackify_markdown(text):
     if not text: return "", []
     
-    # A. Link Extraction
-    links = re.findall(r'[\[\(](.*?)[\]\)]\((/\w+.*?)\)|\[(.*?)\]\[(/\w+.*?)\]|\((.*?)\)\[(/\w+.*?)\]', text)
+    # A. Link Extraction: Handles [Title](/path), [Title] (/path), and (Title)[/path]
+    links = re.findall(r'[\[\(](.*?)[\]\)]\s*[\(\[](/\w+.*?)[\]\)]', text)
     related_links = []
     for match in links:
-        title = match[0] or match[2] or match[4]
-        path = match[1] or match[3] or match[5]
+        title, path = match[0].strip(), match[1].strip()
         if title and path:
             full_url = f"https://docs.firebolt.io{path}"
             if full_url not in [l['url'] for l in related_links]:
@@ -43,21 +39,27 @@ def slackify_markdown(text):
 
     # B. Cleanup
     text = re.sub(r'```suggestions.*?```', '', text, flags=re.DOTALL)
-    text = re.sub(r'[\[\(].*?[\]\)]\[/\w+.*?\]|\[.*?\]\(/\w+.*?\)', '', text) 
+    text = re.sub(r'[\[\(].*?[\]\)]\s*[\(\[]/\w+.*?[\]\)]', '', text) 
     
     # C. Whitelist Protection
-    whitelist = ['pypi.org', 'firebolt.io', 'github.com', 'support@firebolt.io']
+    # Added information_schema to ensure SQL system tables aren't redacted
+    whitelist = ['pypi.org', 'firebolt.io', 'github.com', 'support@firebolt.io', 'information_schema']
+    
     urls = re.findall(r'https?://\S+|[\w\.-]+@[\w\.-]+\.\w+', text)
     for i, item in enumerate(urls):
         text = text.replace(item, f"__WHITELIST_PLACEHOLDER_{i}__")
 
-    # D. Redactor: Skip versions, redact identifiers
+    # D. Redactor
     def pii_redactor(match):
         val = match.group(0)
+        # 1. Skip if it's a version number (e.g., 2.7.2)
         if re.match(r'^[\d\.]+$', val): return val 
+        # 2. Skip if it contains a whitelisted keyword (e.g., information_schema.tables)
+        if any(word in val.lower() for word in whitelist): return val
         return "[IDENTIFIER_REDACTED]"
 
     text = re.sub(r'\b(engine|account|table|database):\s*[\w-]+', r'\1: [REDACTED]', text, flags=re.I)
+    # Redacts word.word patterns unless they are whitelisted
     text = re.sub(r'\b(?![0-9\. ]+\b)[a-zA-Z_][\w]*\.[a-zA-Z_][\w]*\b', pii_redactor, text)
 
     # Restore Whitelisted Items
@@ -74,31 +76,26 @@ def slackify_markdown(text):
 # --- 2. Helper: Discovery v2 API ---
 def ask_mintlify(query):
     clean_query = re.sub(r'<@U[A-Z0-9]+>', '', query).strip()
-    domain = os.environ.get('MINTLIFY_DOMAIN', 'firebolt')
-    url = f"https://api.mintlify.com/discovery/v2/assistant/{domain}/message"
+    url = f"https://api.mintlify.com/discovery/v2/assistant/{os.environ.get('MINTLIFY_DOMAIN', 'firebolt')}/message"
     
     try:
         headers = {
             "Authorization": f"Bearer {os.environ['MINTLIFY_ASSISTANT_KEY']}",
             "Content-Type": "application/json"
         }
-        
         payload = {
-            "fp": "slack-auror-bot",
+            "fp": "slack-firebot",
             "messages": [{"id": str(int(time.time())), "role": "user", "parts": [{"type": "text", "text": clean_query}]}],
             "retrievalPageSize": 5
         }
         
         response = requests.post(url, json=payload, headers=headers, stream=True, timeout=40)
-        
         full_answer = ""
         for line in response.iter_lines():
             if not line: continue
             line_str = line.decode('utf-8')
-            if line_str.startswith('data: '):
-                line_str = line_str[6:].strip()
+            if line_str.startswith('data: '): line_str = line_str[6:].strip()
             if line_str == "[DONE]": continue
-            
             try:
                 data = json.loads(line_str)
                 if data.get("type") == "text-delta":
@@ -106,9 +103,6 @@ def ask_mintlify(query):
             except: continue
 
         if full_answer:
-            refusal_triggers = ["intended for someone else", "not able to help with this specific request"]
-            if any(trigger in full_answer for trigger in refusal_triggers) and len(full_answer) < 300:
-                return None, []
             return slackify_markdown(full_answer)
     except Exception as e:
         logger.error(f"❌ API Error: {e}")
@@ -118,13 +112,11 @@ def ask_mintlify(query):
 def process_aggregated_thread(channel_id, thread_ts, trigger_ts):
     messages = MESSAGE_BUFFER.pop(thread_ts, [])
     full_text = " ".join(messages)
-    
-    # Logic to query Mintlify after the collation period
     answer, related_links = ask_mintlify(full_text)
     
     if answer:
         blocks = [
-            {"type": "section", "text": {"type": "mrkdwn", "text": f"*Auror Bot Response:*\n\n{answer}"}},
+            {"type": "section", "text": {"type": "mrkdwn", "text": f"*Firebot Response:*\n\n{answer}"}},
             {"type": "divider"}
         ]
         if related_links:
@@ -138,16 +130,17 @@ def process_aggregated_thread(channel_id, thread_ts, trigger_ts):
                 {"type": "button", "text": {"type": "plain_text", "text": "👎 Tag Support"}, "action_id": "feedback_neg", "style": "danger"}
             ]
         })
-        
         app.client.chat_postMessage(channel=channel_id, thread_ts=thread_ts, text="Answer found.", blocks=blocks)
     else:
-        # Removal logic if silent
         try: app.client.reactions_remove(channel=channel_id, name="eyes", timestamp=trigger_ts)
         except: pass
 
 # --- 4. Event Handlers ---
 def handle_incoming_text(event):
-    if event.get("bot_id"): return
+    msg_bot_id = event.get("bot_id")
+    if msg_bot_id and (msg_bot_id in IGNORE_BOT_IDS or msg_bot_id == os.environ.get("MY_BOT_ID")):
+        return
+
     channel_id = event["channel"]
     thread_ts = event.get("thread_ts") or event["ts"]
     
@@ -176,7 +169,6 @@ def handle_messages(event, say):
     if thread_ts and thread_ts in MESSAGE_BUFFER:
         handle_incoming_text(event)
 
-# --- 5. Interactivity ---
 @app.action("feedback_pos")
 def handle_pos(ack, body, say):
     ack(); say(text="Glad I could help! ✅", thread_ts=body["container"]["thread_ts"])
