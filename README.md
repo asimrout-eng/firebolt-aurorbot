@@ -1,4 +1,4 @@
-# Firebolt Auror Bot
+# Firebolt Firebot
 
 A Slack bot that automatically answers Firebolt-related questions using Mintlify's Discovery API. The bot monitors channels for mentions and thread replies, collates messages, and provides intelligent responses with links to relevant documentation.
 
@@ -16,6 +16,19 @@ A Slack bot that automatically answers Firebolt-related questions using Mintlify
 
 ```
 Slack Channel → Bot Mention → Message Buffer (60s collation) → Mintlify API → Formatted Response
+```
+
+## Repository Structure
+
+```
+firebolt-aurorbot/
+├── deployment/
+│   └── firebot.service   # systemd service template
+├── app.py                # Main application
+├── requirements.txt      # Python dependencies
+├── .env.example          # Environment template
+├── .gitignore            # Git ignore rules
+└── README.md             # This file
 ```
 
 ## Prerequisites
@@ -78,59 +91,103 @@ The bot will connect via Socket Mode and start listening for mentions.
 
 1. **Ask a Question**: Mention the bot in any channel it's invited to:
    ```
-   @AurorBot How do I create an external table in Firebolt?
+   @Firebot How do I create an external table in Firebolt?
    ```
 
 2. **Thread Replies**: Reply in the same thread to add context before the bot responds.
 
 3. **Feedback**: Use the buttons to mark responses as helpful or request human support.
 
-## Development
+## Production Deployment
 
-### Project Structure
+### Overview
 
+- **GitHub** is your Source of Truth (where you write code)
+- **systemd** is your Process Manager (keeps the bot running 24/7)
+
+### Step 1: Clone the Repository on Your Server
+
+```bash
+cd /home/asimkumarrout
+git clone https://github.com/asimrout-eng/firebolt-aurorbot.git
+cd firebolt-aurorbot
 ```
-firebolt-aurorbot/
-├── app.py              # Main application
-├── requirements.txt    # Python dependencies
-├── .env.example        # Environment template
-├── .gitignore          # Git ignore rules
-└── README.md           # This file
+
+### Step 2: Set Up Python Environment
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 ```
 
-### Key Components
+### Step 3: Configure Environment Variables
 
-- **Message Buffer**: Aggregates messages in a thread for 60 seconds before processing
-- **Mintlify Integration**: Streams responses from the Discovery v2 API
-- **Slack Formatting**: Converts Markdown to Slack's mrkdwn format
-- **PII Protection**: Redacts database, table, and account identifiers
+```bash
+cp .env.example .env
+nano .env  # Fill in your production credentials
+```
 
-## Deployment
+### Step 4: Install the systemd Service
 
-For production deployment, consider:
+Copy the service template to the system directory:
 
-1. **Process Manager**: Use `systemd`, `supervisord`, or PM2 to keep the bot running
-2. **Logging**: Configure proper log aggregation
-3. **Monitoring**: Set up health checks and alerting
-4. **Secrets Management**: Use a secrets manager instead of `.env` files
+```bash
+sudo cp deployment/firebot.service /etc/systemd/system/firebot.service
+```
 
-### Example systemd Service
+> **Note**: The service file is stored at `/etc/systemd/system/firebot.service` on the server, while the template lives in `deployment/` in the repo.
 
-```ini
-[Unit]
-Description=Firebolt Auror Bot
-After=network.target
+### Step 5: Enable and Start the Service
 
-[Service]
-Type=simple
-User=ubuntu
-WorkingDirectory=/opt/firebolt-aurorbot
-ExecStart=/opt/firebolt-aurorbot/.venv/bin/python app.py
-Restart=always
-EnvironmentFile=/opt/firebolt-aurorbot/.env
+```bash
+# Register the service
+sudo systemctl daemon-reload
 
-[Install]
-WantedBy=multi-user.target
+# Enable on boot
+sudo systemctl enable firebot.service
+
+# Start the bot
+sudo systemctl start firebot.service
+```
+
+### Step 6: Verify It's Running
+
+```bash
+# Check status
+sudo systemctl status firebot.service
+
+# View logs
+tail -f /home/asimkumarrout/firebolt-aurorbot/firebot.log
+```
+
+### Updating the Bot
+
+When you push changes to GitHub, update the production server:
+
+```bash
+cd /home/asimkumarrout/firebolt-aurorbot
+git pull
+sudo systemctl restart firebot.service
+```
+
+### Service Management Commands
+
+| Command | Description |
+|---------|-------------|
+| `sudo systemctl start firebot.service` | Start the bot |
+| `sudo systemctl stop firebot.service` | Stop the bot |
+| `sudo systemctl restart firebot.service` | Restart after code changes |
+| `sudo systemctl status firebot.service` | Check if running |
+| `sudo systemctl enable firebot.service` | Auto-start on boot |
+| `sudo systemctl disable firebot.service` | Disable auto-start |
+
+### Logs
+
+Logs are written to `/home/asimkumarrout/firebolt-aurorbot/firebot.log`. To monitor in real-time:
+
+```bash
+tail -f /home/asimkumarrout/firebolt-aurorbot/firebot.log
 ```
 
 ## License
@@ -139,4 +196,4 @@ Internal use only - Firebolt
 
 ## Support
 
-For issues or questions, contact the Firebolt DevRel team.
+For issues or questions, contact: asim.rout@firebolt.io
