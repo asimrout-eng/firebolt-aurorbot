@@ -23,13 +23,19 @@ Slack Channel → Bot Mention → Message Buffer (60s collation) → Mintlify AP
 ```
 firebolt-aurorbot/
 ├── deployment/
-│   └── firebot.service   # systemd service template
-├── app.py                # Main application
-├── requirements.txt      # Python dependencies
-├── .env.example          # Environment template
-├── .gitignore            # Git ignore rules
-└── README.md             # This file
+│   └── firebot.service       # systemd service template
+├── docs/
+│   └── FIREBOT_DESIGN_DOC.md # Architecture & design documentation
+├── app.py                    # Main application
+├── requirements.txt          # Python dependencies
+├── .env.example              # Environment template
+├── .gitignore                # Git ignore rules
+└── README.md                 # This file
 ```
+
+## Documentation
+
+For detailed architecture, module design, and implementation details, see the [Design Document](docs/FIREBOT_DESIGN_DOC.md).
 
 ## Prerequisites
 
