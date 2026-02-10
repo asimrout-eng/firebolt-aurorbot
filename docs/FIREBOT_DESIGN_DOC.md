@@ -87,8 +87,9 @@ Firebot acts as a **first-line responder** that:
 │   ┌─────────────────────────────────────────────────────────────────────┐  │
 │   │                    PROCESSING PIPELINE                               │  │
 │   │                                                                      │  │
-│   │   1. Aggregate Messages ──► 2. Query Mintlify ──► 3. Format Output  │  │
-│   │                                                                      │  │
+│   │   1. Aggregate ──► 2. SCRUB PII ──► 3. Query Mintlify ──► 4. Format │  │
+│   │      Messages       (INPUT)          API                   & Scrub  │  │
+│   │                                                            (OUTPUT) │  │
 │   └─────────────────────────────────┬───────────────────────────────────┘  │
 └─────────────────────────────────────┼───────────────────────────────────────┘
                                       │
@@ -256,16 +257,40 @@ T+85s   [Timer expires]                → Process all 3 messages together
 
 ### Module C: Intelligence Layer (Mintlify Discovery API)
 
-**Goal**: Query Firebolt documentation with semantic search.
+**Goal**: Query Firebolt documentation with semantic search while protecting user privacy.
+
+#### Dual PII Scrubbing Architecture
+
+**Critical Design Decision**: PII is scrubbed at TWO points in the pipeline:
+
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   USER QUERY    │───►│   PII SCRUB     │───►│   MINTLIFY      │
+│   (Raw Input)   │    │   (INPUT)       │    │   API           │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+                                                      │
+                                                      ▼
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   SLACK         │◄───│   PII SCRUB     │◄───│   RAW           │
+│   RESPONSE      │    │   (OUTPUT)      │    │   RESPONSE      │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+```
+
+**Why Input Scrubbing Matters**:
+- Users may paste sensitive data (AWS ARNs, account IDs, S3 paths) in their questions
+- This data should NOT be sent to third-party APIs (Mintlify)
+- Scrubbing preserves privacy while maintaining query semantics
 
 #### API Integration
 
 ```python
 def ask_mintlify(query):
-    # Clean the query (remove Slack user mentions)
-    clean_query = re.sub(r'<@U[A-Z0-9]+>', '', query).strip()
+    # CRITICAL: Scrub PII BEFORE sending to external API
+    # This protects user data from leaving the system
+    clean_query, _ = slackify_markdown(query)
     
-    url = f"https://api.mintlify.com/discovery/v2/assistant/{MINTLIFY_DOMAIN}/message"
+    domain = os.environ.get('MINTLIFY_DOMAIN', 'firebolt')
+    url = f"https://api.mintlify.com/discovery/v2/assistant/{domain}/message"
     
     headers = {
         "Authorization": f"Bearer {MINTLIFY_ASSISTANT_KEY}",
@@ -277,7 +302,7 @@ def ask_mintlify(query):
         "messages": [{
             "id": str(int(time.time())),
             "role": "user",
-            "parts": [{"type": "text", "text": clean_query}]
+            "parts": [{"type": "text", "text": clean_query}]  # Scrubbed query
         }],
         "retrievalPageSize": 5  # Number of doc chunks to consider
     }
@@ -292,8 +317,25 @@ def ask_mintlify(query):
             if data.get("type") == "text-delta":
                 full_answer += data.get("delta", "")
     
+    # Scrub the OUTPUT as well (defense in depth)
     return slackify_markdown(full_answer)
 ```
+
+#### Example: Input Scrubbing in Action
+
+**User's Original Question**:
+```
+@Firebot I'm getting an error with my table customer_db.transactions 
+using arn:aws:iam::123456789012:role/FireboltRole
+```
+
+**What Gets Sent to Mintlify** (after scrubbing):
+```
+I'm getting an error with my table [IDENTIFIER_REDACTED] 
+using [AWS_ARN_REDACTED]
+```
+
+**Result**: Mintlify can still understand the question and provide relevant documentation, but sensitive identifiers never leave the system.
 
 #### Streaming Response Handling
 
@@ -308,22 +350,26 @@ data: [DONE]
 
 ---
 
-### Module D: Response Formatter (Slack Markdown)
+### Module D: Text Processor (`slackify_markdown`)
 
-**Goal**: Convert Mintlify's Markdown output to Slack's `mrkdwn` format.
+**Goal**: Dual-purpose function that handles both PII scrubbing and Slack formatting.
+
+This single function is called **twice** in the pipeline:
+1. **On INPUT** (before Mintlify) → Scrubs sensitive data from user questions
+2. **On OUTPUT** (after Mintlify) → Formats response + extracts links + final scrub
 
 #### Transformation Pipeline
 
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   RAW MARKDOWN  │───►│   LINK          │───►│   PII           │
-│   from Mintlify │    │   EXTRACTION    │    │   REDACTION     │
+│   RAW TEXT      │───►│   LINK          │───►│   WHITELIST     │
+│   (input/output)│    │   EXTRACTION    │    │   PROTECTION    │
 └─────────────────┘    └─────────────────┘    └─────────────────┘
                                                       │
                                                       ▼
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   SLACK OUTPUT  │◄───│   FORMATTING    │◄───│   WHITELIST     │
-│   (mrkdwn)      │    │   CONVERSION    │    │   PROTECTION    │
+│   CLEAN OUTPUT  │◄───│   FORMATTING    │◄───│   PII           │
+│   (mrkdwn)      │    │   CONVERSION    │    │   REDACTION     │
 └─────────────────┘    └─────────────────┘    └─────────────────┘
 ```
 
@@ -339,24 +385,45 @@ for title, path in links:
     related_links.append({"title": title, "url": full_url})
 ```
 
-#### PII Redaction
-Protects sensitive identifiers while preserving system tables:
-```python
-# Whitelist: URLs, emails, and SQL system tables
-whitelist = ['pypi.org', 'firebolt.io', 'github.com', 'information_schema']
+#### PII Redaction (Comprehensive)
 
-# Redact: engine names, account names, custom identifiers
+The redactor handles multiple categories of sensitive data:
+
+```python
+# 1. AWS ARNs (IAM roles, S3 buckets, Lambda functions)
+text = re.sub(r'arn:aws:[a-z0-9:-]+', '[AWS_ARN_REDACTED]', text)
+
+# 2. AWS Account IDs (12-digit numbers)
+text = re.sub(r'\b\d{12}\b', '[AWS_ACCOUNT_REDACTED]', text)
+
+# 3. S3 Internal Paths (Firebolt managed storage)
+text = re.sub(r's3://[a-z0-9-]{36}--table-s3', 's3://[S3_INTERNAL_PATH_REDACTED]', text)
+
+# 4. Firebolt Resource Names
 text = re.sub(r'\b(engine|account|table|database):\s*[\w-]+', r'\1: [REDACTED]', text)
 
-# Redact word.word patterns (like schema.table) unless whitelisted
+# 5. Schema.Table Patterns (unless whitelisted)
+whitelist = ['pypi.org', 'firebolt.io', 'github.com', 'information_schema']
+
 def pii_redactor(match):
     val = match.group(0)
-    if any(word in val.lower() for word in whitelist):
-        return val  # Keep information_schema.tables
+    if re.match(r'^[\d\.]+$', val): return val  # Keep version numbers
+    if any(word in val.lower() for word in whitelist): return val
     return "[IDENTIFIER_REDACTED]"
 
 text = re.sub(r'\b[a-zA-Z_][\w]*\.[a-zA-Z_][\w]*\b', pii_redactor, text)
 ```
+
+#### Redaction Examples
+
+| Input | Output | Rule Applied |
+|-------|--------|--------------|
+| `arn:aws:iam::123456789012:role/MyRole` | `[AWS_ARN_REDACTED]` | AWS ARN |
+| `account: 123456789012` | `account: [AWS_ACCOUNT_REDACTED]` | 12-digit ID |
+| `my_db.customers` | `[IDENTIFIER_REDACTED]` | Schema.Table |
+| `information_schema.tables` | `information_schema.tables` | Whitelisted |
+| `engine: prod_engine_v2` | `engine: [REDACTED]` | Firebolt resource |
+| `version 2.7.2` | `version 2.7.2` | Version number preserved |
 
 #### Markdown Conversion
 ```python
@@ -572,15 +639,29 @@ def handle_messages(event, say):
         handle_incoming_text(event)
 ```
 
-### 3. PII Protection
-**Risk**: AI responses might leak customer-specific information.
+### 3. PII Protection (Dual Scrubbing)
+**Risk**: User questions may contain sensitive data (AWS ARNs, account IDs, S3 paths) that could be sent to third-party APIs. AI responses might also leak customer-specific information.
 
-**Solution**: Automatic redaction of identifiers:
+**Solution**: PII is scrubbed at **TWO** points - before sending to Mintlify AND on the response:
+
 ```python
-# Redacts: "engine: my_engine" → "engine: [REDACTED]"
-# Redacts: "customer_db.users" → "[IDENTIFIER_REDACTED]"
-# Preserves: "information_schema.tables" (whitelisted)
+def ask_mintlify(query):
+    # SCRUB INPUT: Protects user data from leaving the system
+    clean_query, _ = slackify_markdown(query)
+    
+    # ... send clean_query to Mintlify ...
+    
+    # SCRUB OUTPUT: Defense in depth
+    return slackify_markdown(full_answer)
 ```
+
+**What Gets Redacted**:
+- AWS ARNs → `[AWS_ARN_REDACTED]`
+- 12-digit AWS Account IDs → `[AWS_ACCOUNT_REDACTED]`
+- S3 internal paths → `[S3_INTERNAL_PATH_REDACTED]`
+- `engine: my_engine` → `engine: [REDACTED]`
+- `customer_db.users` → `[IDENTIFIER_REDACTED]`
+- Preserves: `information_schema.tables` (whitelisted)
 
 ### 4. Graceful Failure
 **Risk**: API timeout leaves user with no response.
