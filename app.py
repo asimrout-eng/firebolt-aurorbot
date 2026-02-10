@@ -27,7 +27,7 @@ app = App(token=os.environ.get("SLACK_BOT_TOKEN"))
 def slackify_markdown(text):
     if not text: return "", []
     
-    # A. Link Extraction: Handles [Title](/path), [Title] (/path), and (Title)[/path]
+    # A. Link Extraction
     links = re.findall(r'[\[\(](.*?)[\]\)]\s*[\(\[](/\w+.*?)[\]\)]', text)
     related_links = []
     for match in links:
@@ -37,36 +37,43 @@ def slackify_markdown(text):
             if full_url not in [l['url'] for l in related_links]:
                 related_links.append({"title": title, "url": full_url})
 
-    # B. Cleanup
+    # B. Cleanup Mintlify artifacts
     text = re.sub(r'```suggestions.*?```', '', text, flags=re.DOTALL)
     text = re.sub(r'[\[\(].*?[\]\)]\s*[\(\[]/\w+.*?[\]\)]', '', text) 
     
-    # C. Whitelist Protection
-    # Added information_schema to ensure SQL system tables aren't redacted
+    # C. URL & Whitelist Protection
     whitelist = ['pypi.org', 'firebolt.io', 'github.com', 'support@firebolt.io', 'information_schema']
-    
     urls = re.findall(r'https?://\S+|[\w\.-]+@[\w\.-]+\.\w+', text)
     for i, item in enumerate(urls):
         text = text.replace(item, f"__WHITELIST_PLACEHOLDER_{i}__")
 
-    # D. Redactor
+    # D. Redactor Logic
     def pii_redactor(match):
         val = match.group(0)
-        # 1. Skip if it's a version number (e.g., 2.7.2)
+        # Skip version numbers (2.7.2)
         if re.match(r'^[\d\.]+$', val): return val 
-        # 2. Skip if it contains a whitelisted keyword (e.g., information_schema.tables)
+        # Skip whitelisted system keywords
         if any(word in val.lower() for word in whitelist): return val
         return "[IDENTIFIER_REDACTED]"
 
+    # 1. Redact AWS ARNs (e.g., arn:aws:iam::123456789012:role/...)
+    text = re.sub(r'arn:aws:[a-z0-9:-]+', '[AWS_ARN_REDACTED]', text)
+    
+    # 2. Redact AWS Account IDs (12-digit strings) and S3 internal UUID paths
+    text = re.sub(r'\b\d{12}\b', '[AWS_ACCOUNT_REDACTED]', text)
+    text = re.sub(r's3://[a-z0-9-]{36}--table-s3', 's3://[S3_INTERNAL_PATH_REDACTED]', text)
+
+    # 3. Redact Firebolt Prefixes
     text = re.sub(r'\b(engine|account|table|database):\s*[\w-]+', r'\1: [REDACTED]', text, flags=re.I)
-    # Redacts word.word patterns unless they are whitelisted
+    
+    # 4. Redact DB.Table patterns
     text = re.sub(r'\b(?![0-9\. ]+\b)[a-zA-Z_][\w]*\.[a-zA-Z_][\w]*\b', pii_redactor, text)
 
     # Restore Whitelisted Items
     for i, item in enumerate(urls):
         text = text.replace(f"__WHITELIST_PLACEHOLDER_{i}__", item)
 
-    # E. Formatting
+    # E. Formatting Cleanup
     text = text.replace('**', '*')
     text = re.sub(r'^#+\s+(.*)$', r'*\1*', text, flags=re.MULTILINE)
     text = re.sub(r'(?i)\b(for more details|see the|refer to|read more|check the|available at)\s*[\.\s]*$', '', text).strip()
@@ -75,8 +82,11 @@ def slackify_markdown(text):
 
 # --- 2. Helper: Discovery v2 API ---
 def ask_mintlify(query):
-    clean_query = re.sub(r'<@U[A-Z0-9]+>', '', query).strip()
-    url = f"https://api.mintlify.com/discovery/v2/assistant/{os.environ.get('MINTLIFY_DOMAIN', 'firebolt')}/message"
+    # Scrub the query BEFORE sending to Mintlify
+    clean_query, _ = slackify_markdown(query)
+    
+    domain = os.environ.get('MINTLIFY_DOMAIN', 'firebolt')
+    url = f"https://api.mintlify.com/discovery/v2/assistant/{domain}/message"
     
     try:
         headers = {
@@ -135,7 +145,7 @@ def process_aggregated_thread(channel_id, thread_ts, trigger_ts):
         try: app.client.reactions_remove(channel=channel_id, name="eyes", timestamp=trigger_ts)
         except: pass
 
-# --- 4. Event Handlers ---
+# --- Event Handlers & Socket Mode Init ---
 def handle_incoming_text(event):
     msg_bot_id = event.get("bot_id")
     if msg_bot_id and (msg_bot_id in IGNORE_BOT_IDS or msg_bot_id == os.environ.get("MY_BOT_ID")):
