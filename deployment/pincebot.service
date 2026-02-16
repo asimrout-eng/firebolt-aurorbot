@@ -1,0 +1,19 @@
+[Unit]
+Description=Pincebot Slack Assistant
+After=network.target
+
+[Service]
+Type=simple
+User=asimkumarrout
+# This is where you cloned your GitHub repo
+WorkingDirectory=/home/asimkumarrout/firebolt-pincebot
+# This points to the python inside your virtual environment
+ExecStart=/home/asimkumarrout/firebolt-pincebot/.venv/bin/python app.py
+Restart=always
+RestartSec=5
+# Logs will be saved here for easy debugging
+StandardOutput=append:/home/asimkumarrout/firebolt-pincebot/pincebot.log
+StandardError=append:/home/asimkumarrout/firebolt-pincebot/pincebot.log
+
+[Install]
+WantedBy=multi-user.target

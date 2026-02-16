@@ -1,4 +1,4 @@
-# Firebot Design Document
+# Pincebot Design Document
 
 **Firebolt Slack AI Assistant**
 
@@ -6,7 +6,7 @@
 
 ## Executive Summary
 
-Firebot is an autonomous Slack assistant that answers Firebolt-related technical questions by leveraging Mintlify's Discovery API. The system monitors Slack channels for @mentions, aggregates conversational context, queries the documentation intelligence layer, and delivers formatted responses with relevant documentation links.
+Pincebot is an autonomous Slack assistant that answers Firebolt-related technical questions by leveraging Mintlify's Discovery API. The system monitors Slack channels for @mentions, aggregates conversational context, queries the documentation intelligence layer, and delivers formatted responses with relevant documentation links.
 
 ---
 
@@ -24,7 +24,7 @@ Firebot is an autonomous Slack assistant that answers Firebolt-related technical
 
 ### The Solution
 
-Firebot acts as a **first-line responder** that:
+Pincebot acts as a **first-line responder** that:
 - Monitors channels 24/7 for questions
 - Aggregates multi-message context before responding
 - Queries documentation intelligently
@@ -56,7 +56,7 @@ Firebot acts as a **first-line responder** that:
 │                             │                                               │
 │                             ▼                                               │
 │                    ┌────────────────┐                                       │
-│                    │  @Firebot      │  ◄── User Mention                     │
+│                    │  @Pincebot      │  ◄── User Mention                     │
 │                    │  Mention       │                                       │
 │                    └────────┬───────┘                                       │
 └─────────────────────────────┼───────────────────────────────────────────────┘
@@ -109,7 +109,7 @@ Firebot acts as a **first-line responder** that:
 │                         RESPONSE DELIVERY                                    │
 │                                                                             │
 │   ┌─────────────────────────────────────────────────────────────────────┐  │
-│   │  *Firebot Response:*                                                 │  │
+│   │  *Pincebot Response:*                                                 │  │
 │   │                                                                      │  │
 │   │  To create an external table in Firebolt, use the following...      │  │
 │   │                                                                      │  │
@@ -140,7 +140,7 @@ Firebot acts as a **first-line responder** that:
 
 #### Event Subscriptions
 ```
-app_mention     → Triggers when @Firebot is mentioned
+app_mention     → Triggers when @Pincebot is mentioned
 message.channels → Captures thread replies
 message.groups   → Captures private channel messages
 ```
@@ -156,7 +156,7 @@ app = App(token=os.environ.get("SLACK_BOT_TOKEN"))
 @app.event("app_mention")
 def handle_mentions(event, say):
     """
-    Triggered when user @mentions Firebot.
+    Triggered when user @mentions Pincebot.
     Adds 👀 reaction and queues message for processing.
     """
     handle_incoming_text(event)
@@ -165,7 +165,7 @@ def handle_mentions(event, say):
 def handle_messages(event, say):
     """
     Listens to ALL messages but only processes
-    those in threads where Firebot is already engaged.
+    those in threads where Pincebot is already engaged.
     """
     thread_ts = event.get("thread_ts")
     if thread_ts and thread_ts in MESSAGE_BUFFER:
@@ -192,12 +192,12 @@ def handle_incoming_text(event):
 #### Why Aggregation Matters
 Users often split questions across multiple messages:
 ```
-User: @Firebot I'm trying to create an external table
+User: @Pincebot I'm trying to create an external table
 User: but I keep getting an error
 User: here's the error message: [paste]
 ```
 
-Without aggregation, Firebot would respond to each message individually, losing context.
+Without aggregation, Pincebot would respond to each message individually, losing context.
 
 #### Buffer Architecture
 
@@ -247,7 +247,7 @@ def handle_incoming_text(event):
 #### Visual Timeline
 
 ```
-T+0s    User: @Firebot how do I...     → Timer starts (60s)
+T+0s    User: @Pincebot how do I...     → Timer starts (60s)
 T+10s   User: also, what about...      → Timer RESETS (60s)
 T+25s   User: here's my code: ...      → Timer RESETS (60s)
 T+85s   [Timer expires]                → Process all 3 messages together
@@ -298,7 +298,7 @@ def ask_mintlify(query):
     }
     
     payload = {
-        "fp": "slack-firebot",  # Fingerprint for analytics
+        "fp": "slack-pincebot",  # Fingerprint for analytics
         "messages": [{
             "id": str(int(time.time())),
             "role": "user",
@@ -325,7 +325,7 @@ def ask_mintlify(query):
 
 **User's Original Question**:
 ```
-@Firebot I'm getting an error with my table customer_db.transactions 
+@Pincebot I'm getting an error with my table customer_db.transactions 
 using arn:aws:iam::123456789012:role/FireboltRole
 ```
 
@@ -450,7 +450,7 @@ blocks = [
     # Main response
     {
         "type": "section",
-        "text": {"type": "mrkdwn", "text": f"*Firebot Response:*\n\n{answer}"}
+        "text": {"type": "mrkdwn", "text": f"*Pincebot Response:*\n\n{answer}"}
     },
     
     # Divider
@@ -551,18 +551,18 @@ message.groups       - Thread monitoring (private)
 │   │              (Process Manager)                           │  │
 │   │                                                         │  │
 │   │   ┌─────────────────────────────────────────────────┐  │  │
-│   │   │              firebot.service                     │  │  │
+│   │   │              pincebot.service                     │  │  │
 │   │   │                                                 │  │  │
 │   │   │   ExecStart: python app.py                      │  │  │
 │   │   │   Restart: always                               │  │  │
-│   │   │   Logs: firebot.log                             │  │  │
+│   │   │   Logs: pincebot.log                             │  │  │
 │   │   └─────────────────────────────────────────────────┘  │  │
 │   └─────────────────────────────────────────────────────────┘  │
 │                                                                 │
-│   /home/asimkumarrout/firebolt-aurorbot/                       │
+│   /home/asimkumarrout/firebolt-pincebot/                       │
 │   ├── app.py                                                   │
 │   ├── .env              ◄── Credentials (not in git)           │
-│   ├── firebot.log       ◄── Runtime logs                       │
+│   ├── pincebot.log       ◄── Runtime logs                       │
 │   └── .venv/            ◄── Python environment                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -571,18 +571,18 @@ message.groups       - Thread monitoring (private)
 
 ```ini
 [Unit]
-Description=Firebot Slack Assistant
+Description=Pincebot Slack Assistant
 After=network.target
 
 [Service]
 Type=simple
 User=asimkumarrout
-WorkingDirectory=/home/asimkumarrout/firebolt-aurorbot
-ExecStart=/home/asimkumarrout/firebolt-aurorbot/.venv/bin/python app.py
+WorkingDirectory=/home/asimkumarrout/firebolt-pincebot
+ExecStart=/home/asimkumarrout/firebolt-pincebot/.venv/bin/python app.py
 Restart=always
 RestartSec=5
-StandardOutput=append:/home/asimkumarrout/firebolt-aurorbot/firebot.log
-StandardError=append:/home/asimkumarrout/firebolt-aurorbot/firebot.log
+StandardOutput=append:/home/asimkumarrout/firebolt-pincebot/pincebot.log
+StandardError=append:/home/asimkumarrout/firebolt-pincebot/pincebot.log
 
 [Install]
 WantedBy=multi-user.target
@@ -604,9 +604,9 @@ WantedBy=multi-user.target
 
 ```bash
 # On production server
-cd /home/asimkumarrout/firebolt-aurorbot
+cd /home/asimkumarrout/firebolt-pincebot
 git pull origin main
-sudo systemctl restart firebot.service
+sudo systemctl restart pincebot.service
 ```
 
 ---
@@ -614,7 +614,7 @@ sudo systemctl restart firebot.service
 ## Operational Guardrails (Safety)
 
 ### 1. Bot Loop Prevention
-**Risk**: Firebot responds to itself or other bots, creating infinite loops.
+**Risk**: Pincebot responds to itself or other bots, creating infinite loops.
 
 **Solution**:
 ```python
@@ -627,9 +627,9 @@ def handle_incoming_text(event):
 ```
 
 ### 2. Thread Isolation
-**Risk**: Firebot responds to every message in a channel.
+**Risk**: Pincebot responds to every message in a channel.
 
-**Solution**: Only process messages in threads where Firebot was explicitly mentioned:
+**Solution**: Only process messages in threads where Pincebot was explicitly mentioned:
 ```python
 @app.event("message")
 def handle_messages(event, say):
@@ -724,7 +724,7 @@ def handle_neg(ack, body, say):
 
 ### Main Application (app.py)
 
-See GitHub: [github.com/asimrout-eng/firebolt-aurorbot](https://github.com/asimrout-eng/firebolt-aurorbot)
+See GitHub: [github.com/firebolt-analytics/pincebot](https://github.com/firebolt-analytics/pincebot)
 
 ### Dependencies (requirements.txt)
 
@@ -753,4 +753,4 @@ python-dotenv==1.2.1
 
 **Owner**: Asim Rout  
 **Email**: asim.rout@firebolt.io  
-**Repository**: [github.com/asimrout-eng/firebolt-aurorbot](https://github.com/asimrout-eng/firebolt-aurorbot)
+**Repository**: [github.com/firebolt-analytics/pincebot](https://github.com/firebolt-analytics/pincebot)

@@ -94,7 +94,7 @@ def ask_mintlify(query):
             "Content-Type": "application/json"
         }
         payload = {
-            "fp": "slack-firebot",
+            "fp": "slack-pincebot",
             "messages": [{"id": str(int(time.time())), "role": "user", "parts": [{"type": "text", "text": clean_query}]}],
             "retrievalPageSize": 5
         }
@@ -126,7 +126,7 @@ def process_aggregated_thread(channel_id, thread_ts, trigger_ts):
     
     if answer:
         blocks = [
-            {"type": "section", "text": {"type": "mrkdwn", "text": f"*Firebot Response:*\n\n{answer}"}},
+            {"type": "section", "text": {"type": "mrkdwn", "text": f"*Pincebot Response:*\n\n{answer}"}},
             {"type": "divider"}
         ]
         if related_links:
